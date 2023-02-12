@@ -1,3 +1,7 @@
+#include <fcntl.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "systemcalls.h"
 
 /**
@@ -16,8 +20,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int return_value = system(cmd);
+    if(return_value == 0){
+        if(WIFEXITED(return_value)){
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -58,10 +67,19 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
-
+    int status;
+    pid_t child_pid = fork();
+    if(child_pid == 0){
+        execv(command[0],command);
+        // execv failed to run if it returns
+        exit(1);
+    }
+    else{
+        // wait for the child process to terminate
+        wait(&status);
+    }
     va_end(args);
-
-    return true;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 /**
@@ -92,8 +110,24 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    int kidpid;
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd < 0) { perror("open"); abort(); }
+    switch (kidpid = fork()) {
+        case -1: perror("fork"); abort();
+        case 0:
+            if (dup2(fd, 1) < 0) { perror("dup2"); abort(); }
+            close(fd);
+            execv(command[0], command); perror("execv"); abort();
+        default:
+            close(fd);
+
+            int status;
+            wait(&status);
+            return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
 
     va_end(args);
 
-    return true;
+    return false;
 }
