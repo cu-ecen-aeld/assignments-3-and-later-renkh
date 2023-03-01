@@ -64,7 +64,7 @@ void openFile(char *filename, int acceptedfd){
         exit(EXIT_FAILURE);
 
     while ((read = getline(&line, &len, fp)) != -1) {
-        printf("Retrieved line of length %zu\n", read);
+        // printf("Retrieved line of length %zu\n", read);
         if(send_all(acceptedfd, line, read)){
             // printf("Sent out: %s", line);
             continue;
@@ -187,7 +187,7 @@ int main(int argc, char *argv[])
                 strcat (data, tmpstr);
                 if (c == '\n')
                 {
-                    printf("Found end of line, whole word is: %s", data);
+                    // printf("Found end of line, whole word is: %s", data);
                     createFile("/var/tmp/aesdsocketdata", data);
                     openFile("/var/tmp/aesdsocketdata", acceptedfd);
                     break;
