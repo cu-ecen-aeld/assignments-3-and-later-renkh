@@ -14,7 +14,7 @@
 #include <errno.h>
 #include <signal.h>
 
-void createFile(char *writefile, char *writestr){
+void appendToFile(char *writefile, char *writestr){
     syslog(LOG_DEBUG, "Writing %s to %s", writestr, basename(writefile));
 
     FILE *fp = fopen(writefile, "a");
@@ -55,7 +55,7 @@ bool send_all(int socket, void *buffer, ssize_t length)
 
 void openFile(char *filename, int acceptedfd){
     FILE * fp;
-    char * line = (char*) malloc(1024);
+    char * line = (char*) malloc(20000);
     size_t len = 1024;
     ssize_t read;
 
@@ -65,17 +65,51 @@ void openFile(char *filename, int acceptedfd){
 
     while ((read = getline(&line, &len, fp)) != -1) {
         // printf("Retrieved line of length %zu\n", read);
-        if(send_all(acceptedfd, line, read)){
-            // printf("Sent out: %s", line);
-            continue;
+        char *ptr = (char*) line;
+        while (len > 0)
+        {
+            ssize_t bytes_to_send = 1024;
+            if(read < 1024){
+                bytes_to_send = read;
+            }
+            ssize_t i = send(acceptedfd, ptr, bytes_to_send, 0);
+            // if (i < 1){
+            //     printf("Fail send %s\n", strerror(errno));
+            // }
+            ptr += i;
+            read -= i;
         }
-        else{
-            printf("DID NOT SEND: %ld bytes\n", read);
-        }
+
     }
 
     fclose(fp);
     free(line);
+}
+
+char * getFileString(char *filename){
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL)
+        exit(EXIT_FAILURE);
+    char buffer[10];
+    char *input = 0;
+    size_t cur_len = 0;
+    while (fgets(buffer, sizeof(buffer), fp) != 0)
+    {
+        size_t buf_len = strlen(buffer);
+        char *extra = realloc(input, buf_len + cur_len + 1);
+        if (extra == 0)
+            break;
+        input = extra;
+        strcpy(input + cur_len, buffer);
+        cur_len += buf_len;
+        // printf("sending: %s\n", buffer);
+        // ssize_t i = send(acceptedfd, buffer, 10, 0);
+        // if (i < 1){
+        //     printf("Fail send %s\n", strerror(errno));
+        // }
+    }
+    // printf("%s [%d]", input, (int)strlen(input));
+    return input;
 }
 
 int sockfd;
@@ -167,15 +201,28 @@ int main(int argc, char *argv[])
 
         // Receives data over the connection and appends to file
         // /var/tmp/aesdsocketdata, creating this file if it doesn't exist.
-        char* data = (char*) malloc(1024);
-        memset(data, 0, 1024);
-        ssize_t data_len = 1024;
-        char* buffer = (char*) malloc(1024);
-        memset(buffer, 0, 1024);
-        int valread = 0;
-        while ((valread = recv(acceptedfd, buffer, 1024, 0)) > 0){
-            data = (char *) realloc(data, (data_len + valread));
+        char* data = (char*) malloc(1);
+        memset(data, 0, 1);
+        size_t data_len = 0;
+        int BUF_SIZE = 1024;
+        char* buffer = (char*) malloc(BUF_SIZE);
+        memset(buffer, 0, BUF_SIZE);
+        ssize_t valread = 0;
+        while ((valread = recv(acceptedfd, buffer, BUF_SIZE, 0)) > 0){
             data_len += valread;
+            data = (char *) realloc(data, (data_len + valread)+1);
+            if(data == NULL){
+                printf("DATA NOT ALLOCATED!");
+                exit(0);
+            }
+            else{
+                // printf("valread %ld = data_len %ld\n", valread, data_len);
+            }
+            // if(valread == 543){
+            //     printf("HERE\n");
+            //     printf("data so far: %s\n", data);
+            //     printf("data_len=%ld\n", data_len);
+            // }
             for (ssize_t i = 0; i < valread; i++)
             {
                 char c = buffer[i];
@@ -183,17 +230,47 @@ int main(int argc, char *argv[])
                 tmpstr[0] = c;
                 tmpstr[1] = 0;
 
-                // resize the data array
+                // if(valread == 543){
+                //     printf("i=%ld and char=%s\n", i, tmpstr);
+                // }
+
                 strcat (data, tmpstr);
                 if (c == '\n')
                 {
                     // printf("Found end of line, whole word is: %s", data);
-                    createFile("/var/tmp/aesdsocketdata", data);
-                    openFile("/var/tmp/aesdsocketdata", acceptedfd);
+                    char *filename = "/var/tmp/aesdsocketdata";
+                    appendToFile(filename, data);
+                    FILE * fp;
+                    char * line = NULL;
+                    size_t len = 0;
+                    ssize_t read;
+
+                    fp = fopen(filename, "r");
+                    if (fp == NULL)
+                        exit(EXIT_FAILURE);
+
+                    while ((read = getline(&line, &len, fp)) != -1) {
+                        ssize_t size_sent = send(acceptedfd, line, read, 0);
+                        if(size_sent == -1){
+                            printf("ERROR SENDING\n");
+                        }
+                        else{
+                            printf("Sent = %ld\n", size_sent);
+                        }
+                    }
+                    // char *string = getFileString("/var/tmp/aesdsocketdata");
+                    // printf("got string: %s\n", string);
+                    // ssize_t packets = send(acceptedfd, string, data_len, MSG_NOSIGNAL);
+                    // if (packets < 1){
+                    //     printf("Fail send %s\n", strerror(errno));
+                    // }
+                    // else{
+                    //     printf("Sent %ld packets\n", packets);
+                    // }
                     break;
                 }
             }
-            memset(buffer, 0, 1024);
+            memset(buffer, 0, BUF_SIZE);
         }
 
         // openFile("/var/tmp/aesdsocketdata", acceptedfd);
@@ -203,6 +280,14 @@ int main(int argc, char *argv[])
         printf("Closed connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
         free(buffer);
         free(data);
+
+    }
+
+    if (remove("/var/tmp/aesdsocketdata") == 0){
+        printf("Deleted successfully\n");
+    }
+    else{
+        printf("Unable to delete the file\n");
     }
 
     return 0;
