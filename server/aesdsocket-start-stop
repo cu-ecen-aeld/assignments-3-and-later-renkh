@@ -1,0 +1,11 @@
+#!/bin/sh
+
+AESDSOCKET=/usr/bin/aesdsocket
+
+case "$1" in
+    start) start-stop-daemon --start -n aesdsocket -a $AESDSOCKET -- -d;;
+    stop) start-stop-daemon --stop -n aesdsocket;;
+    *) echo "Usage: "$1" {start|stop}"
+esac
+
+exit 0
