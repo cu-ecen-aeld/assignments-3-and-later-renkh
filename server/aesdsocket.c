@@ -15,7 +15,7 @@
 #include <signal.h>
 
 void appendToFile(char *writefile, char *writestr){
-    syslog(LOG_DEBUG, "Writing %s to %s", writestr, basename(writefile));
+    // syslog(LOG_DEBUG, "Writing %s to %s", writestr, basename(writefile));
 
     FILE *fp = fopen(writefile, "a");
     if (fp == NULL) {
@@ -237,7 +237,7 @@ int main(int argc, char *argv[])
                 strcat (data, tmpstr);
                 if (c == '\n')
                 {
-                    // printf("Found end of line, whole word is: %s", data);
+                    printf("Found end of line, whole word is: %s", data);
                     char *filename = "/var/tmp/aesdsocketdata";
                     appendToFile(filename, data);
                     FILE * fp;
