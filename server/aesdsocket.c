@@ -1,18 +1,21 @@
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <netdb.h>
-#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
-#include <libgen.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
 #include <errno.h>
 #include <signal.h>
+#include <pthread.h>
+#include "queue.h"
+#include <time.h>
+
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+char *FILENAME = "/var/tmp/aesdsocketdata";
+
 
 void appendToFile(char *writefile, char *writestr){
     // syslog(LOG_DEBUG, "Writing %s to %s", writestr, basename(writefile));
@@ -86,43 +89,147 @@ void openFile(char *filename, int acceptedfd){
     free(line);
 }
 
-char * getFileString(char *filename){
-    FILE *fp = fopen(filename, "r");
-    if (fp == NULL)
-        exit(EXIT_FAILURE);
-    char buffer[10];
-    char *input = 0;
-    size_t cur_len = 0;
-    while (fgets(buffer, sizeof(buffer), fp) != 0)
+void append_timestamp(){
+    time_t rawtime;
+    struct tm *info;
+    char buffer[80];
+
+    time( &rawtime );
+
+    info = localtime( &rawtime );
+
+    strftime(buffer,80,"timestamp:%Y%m%d%H%M%S\n", info);
+    printf("%s\n", buffer );
+
+    pthread_mutex_lock(&mutex);
+    appendToFile(FILENAME, buffer);
+    pthread_mutex_unlock(&mutex);
+}
+
+bool TIMER_DONE = false;
+int TIMER_SLEEP = 10;
+void *threadproc(void *arg)
+{
+    while(!TIMER_DONE)
     {
-        size_t buf_len = strlen(buffer);
-        char *extra = realloc(input, buf_len + cur_len + 1);
-        if (extra == 0)
-            break;
-        input = extra;
-        strcpy(input + cur_len, buffer);
-        cur_len += buf_len;
-        // printf("sending: %s\n", buffer);
-        // ssize_t i = send(acceptedfd, buffer, 10, 0);
-        // if (i < 1){
-        //     printf("Fail send %s\n", strerror(errno));
-        // }
+        sleep(TIMER_SLEEP);
+        append_timestamp();
     }
-    // printf("%s [%d]", input, (int)strlen(input));
-    return input;
+    return 0;
+}
+
+typedef struct slist_data_s slist_data_t;
+struct slist_data_s {
+    int acceptedfd;
+    pthread_t thread;
+    bool thread_complete;
+    SLIST_ENTRY(slist_data_s) entries;
+};
+
+void *receive_data(void *args){
+    // Receives data over the connection and appends to file
+    // /var/tmp/aesdsocketdata, creating this file if it doesn't exist.
+    slist_data_t *datap = args;
+    int acceptedfd = datap->acceptedfd;
+    char* data = (char*) malloc(1);
+    memset(data, 0, 1);
+    size_t data_len = 0;
+    int BUF_SIZE = 1024;
+    char* buffer = (char*) malloc(BUF_SIZE);
+    memset(buffer, 0, BUF_SIZE);
+    ssize_t valread = 0;
+    bool recv_data = true;
+    while (recv_data){
+        valread = recv(acceptedfd, buffer, BUF_SIZE, 0);
+        if(valread < 0){
+            break;
+        }
+        if(valread == 0){
+            continue;
+        }
+        data_len += valread;
+        data = (char *) realloc(data, (data_len + valread)+1);
+        if(data == NULL){
+            printf("DATA NOT ALLOCATED!");
+            exit(0);
+        }
+        else{
+            // printf("valread %ld = data_len %ld\n", valread, data_len);
+        }
+        for (ssize_t i = 0; i < valread; i++)
+        {
+            char c = buffer[i];
+            char tmpstr[2];
+            tmpstr[0] = c;
+            tmpstr[1] = 0;
+
+            strcat (data, tmpstr);
+            if (c == '\n')
+            {
+                printf("Found word: %s", data);
+                recv_data=false;
+                pthread_mutex_lock(&mutex);
+                appendToFile(FILENAME, data);
+                pthread_mutex_unlock(&mutex);
+                FILE * fp;
+                char * line = NULL;
+                size_t len = 0;
+                ssize_t read;
+
+
+                fp = fopen(FILENAME, "r");
+                if (fp == NULL)
+                    exit(EXIT_FAILURE);
+
+                while ((read = getline(&line, &len, fp)) != -1) {
+                    // printf("read = %ld\n", read);
+                    // printf("acceptedfd = %d\n", acceptedfd);
+                    // printf("sending: %s", line);
+                    ssize_t size_sent = send(acceptedfd, line, read, 0);
+                    if(size_sent == -1){
+                        printf("ERROR SENDING\n");
+                    }
+                    else{
+                        // printf("Sent = %ld\n", size_sent);
+                    }
+                }
+                fclose(fp);
+                free(line);
+                break;
+            }
+        }
+        memset(buffer, 0, BUF_SIZE);
+    }
+    free(buffer);
+    free(data);
+    datap->thread_complete = true;
+
+    return args;
 }
 
 int sockfd;
 struct addrinfo *servinfo;
+SLIST_HEAD(slisthead, slist_data_s) head;
 void sig_handler(int signum){
     syslog(LOG_INFO, "Caught signal, exiting\n");
     printf("Caught signal, exiting\n");
+
     if (remove("/var/tmp/aesdsocketdata") == 0){
         printf("Deleted successfully\n");
     }
     else{
         printf("Unable to delete the file\n");
     }
+
+    // delete list
+    slist_data_t *datap=NULL;
+    while (!SLIST_EMPTY(&head)) {
+        datap = SLIST_FIRST(&head);
+        pthread_join(datap->thread, NULL);
+        SLIST_REMOVE_HEAD(&head, entries);
+        free(datap);
+    }
+
     // closing the listening socket
     freeaddrinfo(servinfo);
     shutdown(sockfd, SHUT_RDWR);
@@ -181,6 +288,10 @@ int main(int argc, char *argv[])
         }
     }
 
+    // start timer
+    pthread_t tid;
+    pthread_create(&tid, NULL, &threadproc, NULL);
+
     int acceptedfd;
     char ipv4[INET_ADDRSTRLEN];
     // Listens for and accepts a connection
@@ -188,99 +299,41 @@ int main(int argc, char *argv[])
         perror("listen");
         return -1;
     }
+
+    SLIST_INIT(&head);
+    slist_data_t *datap=NULL;
+
     while (1)
     {
         if ((acceptedfd = accept(sockfd, servinfo->ai_addr, &servinfo->ai_addrlen)) < 0) {
             perror("accept");
             return -1;
         }
-        // syslog("Accepted connection from xxx");
         syslog(LOG_INFO, "Accepted connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
         printf("Accepted connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
 
+        datap = malloc(sizeof(slist_data_t));
+        datap->acceptedfd = acceptedfd;
+        datap->thread_complete = false;
 
-        // Receives data over the connection and appends to file
-        // /var/tmp/aesdsocketdata, creating this file if it doesn't exist.
-        char* data = (char*) malloc(1);
-        memset(data, 0, 1);
-        size_t data_len = 0;
-        int BUF_SIZE = 1024;
-        char* buffer = (char*) malloc(BUF_SIZE);
-        memset(buffer, 0, BUF_SIZE);
-        ssize_t valread = 0;
-        while ((valread = recv(acceptedfd, buffer, BUF_SIZE, 0)) > 0){
-            data_len += valread;
-            data = (char *) realloc(data, (data_len + valread)+1);
-            if(data == NULL){
-                printf("DATA NOT ALLOCATED!");
-                exit(0);
-            }
-            else{
-                // printf("valread %ld = data_len %ld\n", valread, data_len);
-            }
-            // if(valread == 543){
-            //     printf("HERE\n");
-            //     printf("data so far: %s\n", data);
-            //     printf("data_len=%ld\n", data_len);
-            // }
-            for (ssize_t i = 0; i < valread; i++)
-            {
-                char c = buffer[i];
-                char tmpstr[2];
-                tmpstr[0] = c;
-                tmpstr[1] = 0;
+        SLIST_INSERT_HEAD(&head, datap, entries);
 
-                // if(valread == 543){
-                //     printf("i=%ld and char=%s\n", i, tmpstr);
-                // }
-
-                strcat (data, tmpstr);
-                if (c == '\n')
-                {
-                    printf("Found end of line, whole word is: %s", data);
-                    char *filename = "/var/tmp/aesdsocketdata";
-                    appendToFile(filename, data);
-                    FILE * fp;
-                    char * line = NULL;
-                    size_t len = 0;
-                    ssize_t read;
-
-                    fp = fopen(filename, "r");
-                    if (fp == NULL)
-                        exit(EXIT_FAILURE);
-
-                    while ((read = getline(&line, &len, fp)) != -1) {
-                        ssize_t size_sent = send(acceptedfd, line, read, 0);
-                        if(size_sent == -1){
-                            printf("ERROR SENDING\n");
-                        }
-                        else{
-                            printf("Sent = %ld\n", size_sent);
-                        }
-                    }
-                    // char *string = getFileString("/var/tmp/aesdsocketdata");
-                    // printf("got string: %s\n", string);
-                    // ssize_t packets = send(acceptedfd, string, data_len, MSG_NOSIGNAL);
-                    // if (packets < 1){
-                    //     printf("Fail send %s\n", strerror(errno));
-                    // }
-                    // else{
-                    //     printf("Sent %ld packets\n", packets);
-                    // }
-                    break;
-                }
-            }
-            memset(buffer, 0, BUF_SIZE);
-        }
-
+        pthread_create(&datap->thread, NULL, receive_data, (void*) datap);
         // openFile("/var/tmp/aesdsocketdata", acceptedfd);
-        // closing the connected socket
-        close(acceptedfd);
-        syslog(LOG_INFO, "Closed connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
-        printf("Closed connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
-        free(buffer);
-        free(data);
 
+        // remove
+        slist_data_t *np_temp = NULL;
+        SLIST_FOREACH_SAFE(datap, &head, entries, np_temp){
+            if(datap->thread_complete){
+                // closing the connected socket
+                close(datap->acceptedfd);
+                syslog(LOG_INFO, "Closed connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
+                printf("Closed connection from %s\n", inet_ntop(AF_INET, &servinfo, ipv4, INET_ADDRSTRLEN));
+                pthread_join(datap->thread, NULL);
+                SLIST_REMOVE(&head, datap, slist_data_s, entries);
+                free(datap);
+            }
+        }
     }
 
     if (remove("/var/tmp/aesdsocketdata") == 0){
