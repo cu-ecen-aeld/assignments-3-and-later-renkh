@@ -1,13 +1,14 @@
-SRC := aesdsocket.c
-TARGET = aesdsocket
+SRC ?= aesdsocket.c
+TARGET ?= aesdsocket
 OBJS := $(SRC:.c=.o)
-CC = gcc
-CFLAGS = -g -Wall -Werror -pthread
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -g -Wall -Werror
+LDFLAGS ?= -lpthread -lrt
 
 all: $(TARGET)
 
 $(TARGET) : $(TARGET).c
-	$(CROSS_COMPILE)$(CC) $(CFLAGS) -o $(TARGET) $(TARGET).c
+	$(CC) $(CFLAGS) -o $(INCLUDES) $(TARGET) $(SRC) $(LDFLAGS)
 
 clean:
 	-rm -f *.o $(TARGET) *.elf *.map
