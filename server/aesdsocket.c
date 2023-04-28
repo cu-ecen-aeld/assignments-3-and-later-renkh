@@ -12,9 +12,12 @@
 #include "queue.h"
 #include <time.h>
 
+#define USE_AESD_CHAR_DEVICE 1
+
+char *AESD_CHAR_DEVICE = "/dev/aesdchar";
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-char *FILENAME = "/var/tmp/aesdsocketdata";
+char *AESD_SOCKET_DATA = "/var/tmp/aesdsocketdata";
 
 
 void appendToFile(char *writefile, char *writestr){
@@ -102,7 +105,7 @@ void append_timestamp(){
     printf("%s\n", buffer );
 
     pthread_mutex_lock(&mutex);
-    appendToFile(FILENAME, buffer);
+    appendToFile(AESD_SOCKET_DATA, buffer);
     pthread_mutex_unlock(&mutex);
 }
 
@@ -168,16 +171,26 @@ void *receive_data(void *args){
             {
                 printf("Found word: %s", data);
                 recv_data=false;
-                pthread_mutex_lock(&mutex);
-                appendToFile(FILENAME, data);
-                pthread_mutex_unlock(&mutex);
+
+                if(USE_AESD_CHAR_DEVICE){
+                    appendToFile(AESD_CHAR_DEVICE, data);
+                }
+                else{
+                    pthread_mutex_lock(&mutex);
+                    appendToFile(AESD_SOCKET_DATA, data);
+                    pthread_mutex_unlock(&mutex);
+                }
                 FILE * fp;
                 char * line = NULL;
                 size_t len = 0;
                 ssize_t read;
 
-
-                fp = fopen(FILENAME, "r");
+                if(USE_AESD_CHAR_DEVICE){
+                    fp = fopen(AESD_CHAR_DEVICE, "r");
+                }
+                else{
+                    fp = fopen(AESD_SOCKET_DATA, "r");
+                }
                 if (fp == NULL)
                     exit(EXIT_FAILURE);
 
@@ -289,8 +302,10 @@ int main(int argc, char *argv[])
     }
 
     // start timer
-    pthread_t tid;
-    pthread_create(&tid, NULL, &threadproc, NULL);
+    if(!USE_AESD_CHAR_DEVICE){
+        pthread_t tid;
+        pthread_create(&tid, NULL, &threadproc, NULL);
+    }
 
     int acceptedfd;
     char ipv4[INET_ADDRSTRLEN];
