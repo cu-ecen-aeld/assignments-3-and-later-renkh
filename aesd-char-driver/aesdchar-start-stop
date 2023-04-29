@@ -1,0 +1,13 @@
+#!/bin/sh
+
+case "$1" in
+    start)
+        /usr/bin/aesdchar_load
+        ;;
+    stop)
+        /usr/bin/aesdchar_unload
+        ;;
+    *) echo "Usage: "$1" {start|stop}"
+esac
+
+exit 0
