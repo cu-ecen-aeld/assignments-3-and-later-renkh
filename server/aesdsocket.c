@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include "queue.h"
 #include <time.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define USE_AESD_CHAR_DEVICE 1
 
@@ -198,12 +199,31 @@ void *receive_data(void *args){
                     // printf("read = %ld\n", read);
                     // printf("acceptedfd = %d\n", acceptedfd);
                     // printf("sending: %s", line);
-                    ssize_t size_sent = send(acceptedfd, line, read, 0);
-                    if(size_sent == -1){
-                        printf("ERROR SENDING\n");
+                    if(strstr(line, "AESDCHAR_IOCSEEKTO") != NULL){
+                        struct aesd_seekto seekto;
+
+                        char *iocseekto = strtok(line, ":"); // first token
+                        seekto.write_cmd = atoi(strtok(NULL, ",")); // second token
+                        seekto.write_cmd_offset = atoi(strtok(NULL, ",")); // third token
+
+                        int ioctl_fd = fileno(fp);
+                        int result_ret = ioctl(ioctl_fd, AESDCHAR_IOCSEEKTO, &seekto);
+                        printf(
+                            "Send %s with cmd: %d offset: %d, result: %d",
+                            iocseekto,
+                            seekto.write_cmd,
+                            seekto.write_cmd_offset,
+                            result_ret
+                        );
                     }
                     else{
-                        // printf("Sent = %ld\n", size_sent);
+                        ssize_t size_sent = send(acceptedfd, line, read, 0);
+                        if(size_sent == -1){
+                            printf("ERROR SENDING\n");
+                        }
+                        else{
+                            // printf("Sent = %ld\n", size_sent);
+                        }
                     }
                 }
                 fclose(fp);

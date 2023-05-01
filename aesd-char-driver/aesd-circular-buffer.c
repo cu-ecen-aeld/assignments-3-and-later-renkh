@@ -74,6 +74,7 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
     }
     buffer->entry[buffer->in_offs] = *add_entry;
     buffer->in_offs++;
+    buffer->total_size += add_entry->size;
     // pointer is at the end of allowed buffer space
     if(buffer->in_offs == AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED){
         buffer->in_offs = buffer->out_offs;
