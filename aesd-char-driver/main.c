@@ -111,7 +111,7 @@ llseek assignment 9 options
     implement your own llseek function seperate from fixed_size_llseek handling
     each of the "whence" cases
 */
-loff_t llseek(struct file *filp, loff_t offset, int whence)
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 {
     struct aesd_dev *dev = filp->private_data;
     loff_t file_pos;
@@ -153,37 +153,45 @@ static long aesd_adjust_file_offset(
 {
     long retval = 0;
     struct aesd_dev *dev = filp->private_data;
-    long total_len;
+    long total_len = 0;
     int i;
 
-    if (mutex_lock_interruptible(&dev->lock)){
-        return -ERESTARTSYS;
-    }
-
     if(write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED || write_cmd < 0){
+        PDEBUG("write_cmd: %d is out of bounds!", write_cmd);
         retval = -EINVAL;
         goto out;
     }
-    if(dev->buffer.entry[write_cmd].buffptr == NULL ||
-       dev->buffer.entry[write_cmd].size <= write_cmd_offset){
+    if(dev->buffer.entry[write_cmd].buffptr == NULL){
+        PDEBUG("buffer.entry command hasn't been written yet!");
+        retval = -EINVAL;
+        goto out;
+    }
+    if(dev->buffer.entry[write_cmd].size <= write_cmd_offset){
+        PDEBUG(
+            "buffer.entry command size: %ld <= write_cmd_offset: %d",
+            dev->buffer.entry[write_cmd].size,
+            write_cmd_offset
+        );
         retval = -EINVAL;
         goto out;
     }
 
     for(i = 0; i<AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++){
-        total_len += dev->buffer.entry[i].size;
+        PDEBUG("total_len: %ld at i: %d", total_len, i);
         if (i == write_cmd)
         {
+            PDEBUG("Found the write command at i: %d", i);
+            total_len += write_cmd_offset;
             break;
         }
+        total_len += dev->buffer.entry[i].size;
 
     }
     filp->f_pos = total_len;
+    PDEBUG("filp->f_pos adjusted to %ld", total_len);
 
     out:
-        mutex_unlock(&dev->lock);
-
-    return retval;
+        return retval;
 }
 
 /*
@@ -245,7 +253,7 @@ ioctl implementation
             }
             break;
 */
-loff_t ioctl(struct file *filp, unsigned long cmd, unsigned long arg)
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct aesd_seekto seekto;
     struct aesd_dev *dev = filp->private_data;
@@ -262,6 +270,11 @@ loff_t ioctl(struct file *filp, unsigned long cmd, unsigned long arg)
                 goto out;
             }
             else{
+                PDEBUG(
+                    "AESDCHAR_IOCSEEKTO: write_cmd, %d offset %d",
+                    seekto.write_cmd,
+                    seekto.write_cmd_offset
+                );
                 retval = aesd_adjust_file_offset(
                     filp,
                     seekto.write_cmd,
@@ -393,11 +406,13 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     return retval;
 }
 struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
+    .owner =          THIS_MODULE,
+    .read =           aesd_read,
+    .write =          aesd_write,
+    .open =           aesd_open,
+    .release =        aesd_release,
+    .llseek =         aesd_llseek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

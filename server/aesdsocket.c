@@ -21,22 +21,40 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 char *AESD_SOCKET_DATA = "/var/tmp/aesdsocketdata";
 
 
-void appendToFile(char *writefile, char *writestr){
+void appendToFile(FILE ** fp, char *writestr){
     // syslog(LOG_DEBUG, "Writing %s to %s", writestr, basename(writefile));
 
-    FILE *fp = fopen(writefile, "a");
-    if (fp == NULL) {
-        syslog(LOG_ERR, "Error opening file: %s", writefile);
+    // FILE *fp = fopen(writefile, "a");
+    if (*fp == NULL) {
+        syslog(LOG_ERR, "Error opening file");
         exit(1);
     }
+    if(strstr(writestr, "AESDCHAR_IOCSEEKTO") != NULL){
+        struct aesd_seekto seekto;
 
-    fputs(writestr, fp);
-    if (ferror(fp)) {
+        char *iocseekto = strtok(writestr, ":"); // first token
+        seekto.write_cmd = atoi(strtok(NULL, ",")); // second token
+        seekto.write_cmd_offset = atoi(strtok(NULL, ",")); // third token
+
+        int ioctl_fd = fileno(*fp);
+        int result_ret = ioctl(ioctl_fd, AESDCHAR_IOCSEEKTO, &seekto);
+        printf(
+            "Send %s with cmd: %d offset: %d, result: %d\n",
+            iocseekto,
+            seekto.write_cmd,
+            seekto.write_cmd_offset,
+            result_ret
+        );
+    }
+    else{
+        fputs(writestr, *fp);
+        fseek(*fp, 0, SEEK_SET);
+    }
+
+    if (ferror(*fp)) {
         syslog(LOG_ERR, "Error writing file: %s", writestr);
         exit(1);
     }
-
-    fclose(fp);
 }
 
 
@@ -106,7 +124,8 @@ void append_timestamp(){
     printf("%s\n", buffer );
 
     pthread_mutex_lock(&mutex);
-    appendToFile(AESD_SOCKET_DATA, buffer);
+    FILE *fp = fopen(AESD_SOCKET_DATA, "a");
+    appendToFile(&fp, buffer);
     pthread_mutex_unlock(&mutex);
 }
 
@@ -173,25 +192,28 @@ void *receive_data(void *args){
                 printf("Found word: %s", data);
                 recv_data=false;
 
-                if(USE_AESD_CHAR_DEVICE){
-                    appendToFile(AESD_CHAR_DEVICE, data);
-                }
-                else{
-                    pthread_mutex_lock(&mutex);
-                    appendToFile(AESD_SOCKET_DATA, data);
-                    pthread_mutex_unlock(&mutex);
-                }
                 FILE * fp;
                 char * line = NULL;
                 size_t len = 0;
                 ssize_t read;
 
                 if(USE_AESD_CHAR_DEVICE){
-                    fp = fopen(AESD_CHAR_DEVICE, "r");
+                    fp = fopen(AESD_CHAR_DEVICE, "a+");
+                    appendToFile(&fp, data);
                 }
                 else{
-                    fp = fopen(AESD_SOCKET_DATA, "r");
+                    pthread_mutex_lock(&mutex);
+                    fp = fopen(AESD_SOCKET_DATA, "a+");
+                    appendToFile(&fp, data);
+                    pthread_mutex_unlock(&mutex);
                 }
+
+                // if(USE_AESD_CHAR_DEVICE){
+                //     fp = fopen(AESD_CHAR_DEVICE, "r");
+                // }
+                // else{
+                //     fp = fopen(AESD_SOCKET_DATA, "r");
+                // }
                 if (fp == NULL)
                     exit(EXIT_FAILURE);
 
@@ -199,31 +221,12 @@ void *receive_data(void *args){
                     // printf("read = %ld\n", read);
                     // printf("acceptedfd = %d\n", acceptedfd);
                     // printf("sending: %s", line);
-                    if(strstr(line, "AESDCHAR_IOCSEEKTO") != NULL){
-                        struct aesd_seekto seekto;
-
-                        char *iocseekto = strtok(line, ":"); // first token
-                        seekto.write_cmd = atoi(strtok(NULL, ",")); // second token
-                        seekto.write_cmd_offset = atoi(strtok(NULL, ",")); // third token
-
-                        int ioctl_fd = fileno(fp);
-                        int result_ret = ioctl(ioctl_fd, AESDCHAR_IOCSEEKTO, &seekto);
-                        printf(
-                            "Send %s with cmd: %d offset: %d, result: %d",
-                            iocseekto,
-                            seekto.write_cmd,
-                            seekto.write_cmd_offset,
-                            result_ret
-                        );
+                    ssize_t size_sent = send(acceptedfd, line, read, 0);
+                    if(size_sent == -1){
+                        printf("ERROR SENDING\n");
                     }
                     else{
-                        ssize_t size_sent = send(acceptedfd, line, read, 0);
-                        if(size_sent == -1){
-                            printf("ERROR SENDING\n");
-                        }
-                        else{
-                            // printf("Sent = %ld\n", size_sent);
-                        }
+                        // printf("Sent = %ld\n", size_sent);
                     }
                 }
                 fclose(fp);

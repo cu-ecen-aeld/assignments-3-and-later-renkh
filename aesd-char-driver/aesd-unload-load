@@ -2,4 +2,4 @@ make clean
 make
 sudo ./aesdchar_unload
 sudo ./aesdchar_load
-sudo ../assignment-autotest/test/assignment8/drivertest.sh
+sudo ../assignment-autotest/test/assignment9/sockettest.sh
